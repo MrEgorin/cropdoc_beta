@@ -1,0 +1,26 @@
+{
+  "config": {
+    "name": "trial_09_convnext_tiny",
+    "backbone": "convnext_tiny",
+    "optimizer": "adamw",
+    "lr": 0.0002,
+    "scheduler": "cosine",
+    "aug_strength": "medium",
+    "label_smoothing": 0.1,
+    "freeze_backbone": false,
+    "epochs": 8
+  },
+  "composite_score": 0.6634155080072126,
+  "num_classes": 183,
+  "img_size": 224,
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ]
+}

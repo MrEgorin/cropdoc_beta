@@ -1,0 +1,5 @@
+flask
+torch
+timm==1.0.9
+pillow
+pillow-heif
