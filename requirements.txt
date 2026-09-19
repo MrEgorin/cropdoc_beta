@@ -1,5 +1,6 @@
 flask
 torch
-timm==1.0.9
+torchvision
+timm>=1.0
 pillow
-pillow-heif
+numpy

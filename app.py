@@ -1,9 +1,15 @@
-import base64, glob, io, json, os, re
+"""CropDoctor - local version. Run:  python app.py   ->  http://127.0.0.1:5000"""
+import base64, glob, io, json, os, re, sys, threading, webbrowser
 from collections import defaultdict
 
-import torch, torch.nn as nn, torch.nn.functional as F, timm
-from flask import Flask, jsonify, request, send_from_directory
-from PIL import Image, ImageOps
+try:
+    import numpy as np
+    import torch, torch.nn as nn, torch.nn.functional as F, timm
+    from flask import Flask, jsonify, request, send_file
+    from PIL import Image, ImageOps
+except ImportError as e:
+    sys.exit(f"\n[CropDoctor] Missing package: {e.name}\n"
+             "Install everything with:  pip install -r requirements.txt\n")
 
 try:  # optional: iPhone HEIC/HEIF support
     from pillow_heif import register_heif_opener
@@ -12,27 +18,39 @@ except ImportError:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(HERE, "model"))
+SEARCH = [os.environ.get("MODEL_DIR", ""), HERE, os.path.join(HERE, "model"), os.path.dirname(HERE), os.getcwd()]
 
 
-def find(pattern):
-    hits = sorted(glob.glob(os.path.join(MODEL_DIR, pattern)))
-    if not hits:
-        raise FileNotFoundError(f"No file matching {pattern} in {MODEL_DIR}")
-    return hits[0]
+def find(*patterns):
+    for folder in filter(None, SEARCH):
+        for pat in patterns:
+            hits = sorted(glob.glob(os.path.join(folder, pat)))
+            if hits:
+                return hits[0]
+    sys.exit(f"\n[CropDoctor] Could not find {patterns[0]}.\n"
+             f"Put your model files next to app.py or in the 'model' folder.\nSearched: {[s for s in SEARCH if s]}\n")
 
 
+print("[CropDoctor] Loading model ...")
 cfg = json.load(open(find("best_config*.json"), encoding="utf-8"))
 classes = json.load(open(find("label_encoder*.json"), encoding="utf-8"))
 SIZE, MEAN, STD = cfg["img_size"], cfg["imagenet_mean"], cfg["imagenet_std"]
 
-# Same architecture as build_model() in the notebook: timm backbone + Dropout/Linear head
+# Same architecture as build_model() in the notebook
 backbone = timm.create_model(cfg["config"]["backbone"], pretrained=False, num_classes=0)
 with torch.no_grad():
     feat = backbone.eval()(torch.zeros(1, 3, SIZE, SIZE)).shape[1]
 model = nn.Sequential(backbone, nn.Sequential(nn.Dropout(0.3), nn.Linear(feat, cfg["num_classes"])))
-model.load_state_dict(torch.load(find("best_model*.pth"), map_location="cpu"))
+weights_path = find("best_model*.pth")
+try:
+    state = torch.load(weights_path, map_location="cpu", weights_only=True)
+except TypeError:  # very old torch without weights_only
+    state = torch.load(weights_path, map_location="cpu")
+model.load_state_dict(state)
 model.eval()
+MEAN_T, STD_T = torch.tensor(MEAN)[:, None, None], torch.tensor(STD)[:, None, None]
+print("[CropDoctor] Model ready.")
+
 
 # ---- merge duplicate labels (Bing/Google/Baidu copies, stray "()" suffixes) ----
 def split_label(label):
@@ -41,10 +59,12 @@ def split_label(label):
     disease = re.sub(r"\s+(Baidu|Bing|Google)$", "", disease)
     return plant.strip(), disease
 
+
 parts = [split_label(c) for c in classes]
 by_plant = defaultdict(set)
 for p, d in parts:
     by_plant[p].add(d)
+
 
 def canonical(p, d):
     shorter = [o for o in by_plant[p] if d.startswith(o) and len(o) < len(d)]
@@ -53,16 +73,19 @@ def canonical(p, d):
         d = d[len(p) + 1:]
     return p, d[:1].upper() + d[1:]
 
+
 GROUPS = [canonical(p, d) for p, d in parts]
 
-# ---- app ----
-app = Flask(__name__, static_folder="static")
+app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 
 
 @app.get("/")
 def index():
-    return send_from_directory("static", "index.html")
+    for path in (os.path.join(HERE, "static", "index.html"), os.path.join(HERE, "index.html")):
+        if os.path.exists(path):
+            return send_file(path)
+    return "index.html not found next to app.py or in the 'static' folder.", 404
 
 
 @app.post("/api/predict")
@@ -81,8 +104,8 @@ def predict():
     prev.save(buf, "JPEG", quality=85)
 
     x = img.resize((SIZE, SIZE), Image.BILINEAR)
-    t = torch.from_numpy(__import__("numpy").asarray(x)).permute(2, 0, 1).float() / 255
-    t = ((t - torch.tensor(MEAN)[:, None, None]) / torch.tensor(STD)[:, None, None]).unsqueeze(0)
+    t = torch.from_numpy(np.asarray(x).copy()).permute(2, 0, 1).float() / 255
+    t = ((t - MEAN_T) / STD_T).unsqueeze(0)
     with torch.no_grad():
         probs = F.softmax(model(t), dim=1)[0].tolist()
 
@@ -103,4 +126,11 @@ def predict():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    url = f"http://127.0.0.1:{port}"
+    print(f"\n[CropDoctor] Open  {url}  in your browser (Ctrl+C to stop)\n")
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    try:
+        app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    except OSError:
+        sys.exit(f"\n[CropDoctor] Port {port} is busy. Try another:  set PORT=5001  (Windows)  /  PORT=5001 python app.py\n")

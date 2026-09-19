@@ -147,7 +147,7 @@ async function analyze(f) {
     setState('error');
     $('tag').textContent = 'Not analysed';
     $('title').textContent = "Couldn't check this photo";
-    $('note').textContent = err.message.includes('fetch') ? 'The CropDoctor server is not reachable. Make sure app.py is running.' : err.message;
+    $('note').textContent = location.protocol === 'file:' ? 'This page was opened as a file. Run app.py and open http://127.0.0.1:5000 instead.' : err.message.includes('fetch') ? 'The CropDoctor server is not reachable. Make sure app.py is running.' : err.message;
     $('again').hidden = false; $('again').textContent = 'Try another photo';
   }
 }
